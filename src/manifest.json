@@ -1,0 +1,84 @@
+{
+  "manifest_version": 3,
+  "name": "GC Encounters",
+  "version": "0.2.0",
+  "description": "Mostra quantas vezes você já cruzou com cada jogador da GamersClub, com K/D e aproveitamento. Tudo local, somente leitura.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "GC Encounters: histórico de reencontros",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "permissions": [
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://gamersclub.com.br/*",
+    "https://*.gamersclub.com.br/*",
+    "https://cs.gamersclub.gg/*"
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "options_page": "ui/options.html",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://gamersclub.com.br/lobby/partida/*",
+        "https://gamersclub.com.br/lobby/match/*",
+        "https://cs.gamersclub.gg/lobby/partida/*",
+        "https://cs.gamersclub.gg/lobby/match/*"
+      ],
+      "js": [
+        "content/match.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://gamersclub.com.br/minhas-partidas*",
+        "https://gamersclub.com.br/my-matches*",
+        "https://cs.gamersclub.gg/minhas-partidas*",
+        "https://cs.gamersclub.gg/my-matches*"
+      ],
+      "js": [
+        "content/my-matches.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://gamersclub.com.br/player/*",
+        "https://gamersclub.com.br/jogador/*"
+      ],
+      "js": [
+        "content/profile.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://gamersclub.com.br/*",
+        "https://cs.gamersclub.gg/*"
+      ],
+      "js": [
+        "content/lobby.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "gc-encounters",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Extensao de navegador que conta reencontros com jogadores na GamersClub",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "package": "node build.mjs && node package.mjs",
+    "icons": "node tools/resize-icon.mjs"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "@types/node": "^22.20.4",
+    "esbuild": "^0.24.0",
+    "fake-indexeddb": "^6.0.0",
+    "happy-dom": "^15.11.7",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

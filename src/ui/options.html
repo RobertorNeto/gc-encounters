@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>GC Encounters</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="side">
+        <div class="brand">
+          <img src="../icons/icon48.png" alt="" width="40" height="40" />
+          <div class="brand-text">
+            <strong>GC Encounters</strong>
+            <span>Reencontros na GamersClub</span>
+          </div>
+        </div>
+
+        <a id="live" class="live" href="#s-backfill" data-state="idle">
+          <span class="live-dot" aria-hidden="true"></span>
+          <span id="live-label">Varredura parada</span>
+        </a>
+
+        <nav class="nav" aria-label="Seções">
+          <a href="#s-overview" class="is-active">Visão geral</a>
+          <a href="#s-backfill">Varredura</a>
+          <a href="#s-ranking">Reencontros</a>
+          <a href="#s-group">Agregador</a>
+          <a href="#s-data">Seus dados</a>
+        </nav>
+
+        <p class="privacy">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <path d="M12 3 4.5 6v5.2c0 4.4 3.1 8.4 7.5 9.8 4.4-1.4 7.5-5.4 7.5-9.8V6L12 3Z" />
+            <path d="m9 12 2 2 4-4" />
+          </svg>
+          Tudo fica nesta máquina. Sem conta, sem servidor, sem rede fora da GC.
+        </p>
+      </aside>
+
+      <main class="content">
+        <section id="alert" class="alert" role="alert" hidden></section>
+
+        <section id="s-overview" class="block" style="--i: 0" data-nav>
+          <header class="block-head">
+            <h1>Seu histórico</h1>
+            <p>O que a extensão já registrou das suas partidas.</p>
+          </header>
+
+          <dl class="stats">
+            <div><dt>Partidas</dt><dd id="stat-matches">0</dd></div>
+            <div><dt>Jogadores distintos</dt><dd id="stat-players">0</dd></div>
+            <div><dt>Participações</dt><dd id="stat-rows">0</dd></div>
+            <div><dt>Primeira partida</dt><dd id="stat-first" class="is-date">ainda não</dd></div>
+            <div><dt>Última partida</dt><dd id="stat-last" class="is-date">ainda não</dd></div>
+            <div><dt>Meu id GC</dt><dd id="stat-me" class="is-date">não definido</dd></div>
+          </dl>
+
+          <div id="identity" class="panel identity">
+            <div class="me">
+              <span id="me-avatar" class="avatar avatar-lg" hidden></span>
+              <div class="me-body">
+                <div class="name-row">
+                  <h2 id="me-nick">Quem é você na GC</h2>
+                  <span id="me-level"></span>
+                  <a id="me-link" class="profile-link" href="#" target="_blank" rel="noopener" hidden>Abrir perfil na GC</a>
+                  <button id="me-maps" class="map-btn" type="button" hidden>
+                    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M9 4 3.5 6v14L9 18l6 2 5.5-2V4L15 6 9 4Z" /><path d="M9 4v14M15 6v14" /></svg>
+                    <span>Mapas</span>
+                  </button>
+                </div>
+                <p id="me-sub" class="me-sub">
+                  Sem o seu id a extensão não sabe se você jogou contra ou junto, então nada é gravado
+                  até ele estar preenchido. É o número em <code>gamersclub.com.br/player/&lt;id&gt;</code>.
+                </p>
+                <dl id="me-stats" class="me-stats" hidden>
+                  <div><dt>Partidas</dt><dd id="me-total">0</dd></div>
+                  <div><dt>Vitórias</dt><dd id="me-wins" class="is-good">0</dd></div>
+                  <div><dt>Derrotas</dt><dd id="me-losses" class="is-bad">0</dd></div>
+                  <div><dt>Aproveitamento</dt><dd id="me-rate">0%</dd></div>
+                  <div><dt>K/D</dt><dd id="me-kd">sem dado</dd></div>
+                </dl>
+              </div>
+            </div>
+            <div class="field">
+              <label for="my-id">Meu id GC</label>
+              <div class="input-row">
+                <input id="my-id" type="number" min="1" step="1" inputmode="numeric" placeholder="ex.: 1234567" />
+                <button id="my-id-save" class="btn btn-primary" type="button">Salvar id</button>
+                <button id="my-id-detect" class="btn" type="button">Detectar pela sessão</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="s-backfill" class="block" style="--i: 1" data-nav>
+          <header class="block-head">
+            <h2>Varredura do histórico</h2>
+            <p>
+              Roda em segundo plano, no service worker: não precisa manter a GC aberta. Percorre os
+              meses que a GC lista e depois caminha para trás, mês a mês, até seis meses seguidos sem
+              partida. Se a sessão expirar, para e avisa. Basta entrar na GC de novo.
+            </p>
+          </header>
+
+          <div id="engine" class="engine" data-state="idle">
+            <div class="engine-top">
+              <div class="engine-state">
+                <span class="pill"><span class="pill-dot" aria-hidden="true"></span><span id="bf-title">não iniciada</span></span>
+                <span id="bf-sub" class="engine-sub">Nenhuma varredura iniciada</span>
+              </div>
+              <div class="engine-actions">
+                <button id="bf-start" class="btn btn-primary" type="button">
+                  <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M7 4.5v15l12-7.5-12-7.5Z" class="fill" /></svg>
+                  Iniciar
+                </button>
+                <button id="bf-pause" class="btn" type="button">
+                  <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="6" y="4.5" width="4" height="15" class="fill" /><rect x="14" y="4.5" width="4" height="15" class="fill" /></svg>
+                  Pausar
+                </button>
+                <button id="bf-reset" class="btn btn-danger" type="button">Recomeçar do zero</button>
+              </div>
+            </div>
+
+            <dl class="engine-metrics">
+              <div><dt>Coletadas nesta varredura</dt><dd id="bf-collected">0</dd></div>
+              <div><dt>Páginas lidas</dt><dd id="bf-pages">0</dd></div>
+              <div><dt>Na fila</dt><dd id="bf-queue">0</dd></div>
+              <div><dt>Falhas seguidas</dt><dd id="bf-fail">0 de 3</dd></div>
+            </dl>
+
+            <div class="tape-wrap">
+              <div id="tape" class="tape" aria-label="Meses do histórico"></div>
+              <p id="tape-legend" class="tape-legend">A varredura ainda não começou.</p>
+            </div>
+
+            <p id="backfill-status" class="engine-detail"></p>
+
+            <div id="bf-failed" class="engine-failed" hidden>
+              <div class="engine-failed-head">
+                <div>
+                  <strong id="bf-failed-title">0 partidas não entraram</strong>
+                  <p>Saíram da fila sem virar registro. Tentar de novo relê só elas, uma requisição por partida.</p>
+                </div>
+                <button id="bf-retry" class="btn btn-sm" type="button">Tentar de novo</button>
+              </div>
+              <ul id="bf-failed-list" class="failed-list"></ul>
+            </div>
+
+            <div class="engine-foot">
+              <div class="field field-inline">
+                <label for="throttle">Intervalo entre requisições</label>
+                <div class="input-row">
+                  <div class="input-unit">
+                    <input id="throttle" type="number" min="2500" step="100" inputmode="numeric" />
+                    <span>ms</span>
+                  </div>
+                  <button id="throttle-save" class="btn" type="button">Salvar intervalo</button>
+                </div>
+                <span class="help">Piso de 2500 ms. Aplicado no código, não só aqui.</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="s-ranking" class="block" style="--i: 2" data-nav>
+          <header class="block-head">
+            <h2>Reencontros</h2>
+            <p>
+              Quem mais cruzou o seu caminho. Busque por nick, nick antigo ou id, e abra um jogador
+              para ver as partidas em comum.
+            </p>
+          </header>
+          <div class="search">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m20 20-4.2-4.2" /></svg>
+            <input id="search" type="search" placeholder="Buscar jogador por nick ou id" autocomplete="off" aria-label="Buscar jogador" />
+          </div>
+          <ol id="top" class="list"></ol>
+        </section>
+
+        <section id="s-group" class="block" style="--i: 3" data-nav>
+          <header class="block-head">
+            <h2>Agregador</h2>
+            <p>
+              Escolha até quatro jogadores e veja todas as partidas gravadas em que eles estavam
+              juntos, com aproveitamento, K/D de cada um e os mapas. Só entram partidas que a
+              extensão registrou, ou seja, partidas suas.
+            </p>
+          </header>
+
+          <div class="panel group-pick">
+            <div id="group-chips" class="chips" aria-label="Jogadores escolhidos"></div>
+            <div class="search group-search">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m20 20-4.2-4.2" /></svg>
+              <input
+                id="group-search"
+                type="search"
+                placeholder="Adicionar jogador por nick ou id"
+                autocomplete="off"
+                role="combobox"
+                aria-expanded="false"
+                aria-controls="group-suggest"
+                aria-label="Adicionar jogador ao agregador"
+              />
+              <ul id="group-suggest" class="suggest" role="listbox" hidden></ul>
+            </div>
+            <div class="group-controls">
+              <div class="seg" role="radiogroup" aria-label="Quais partidas contar">
+                <button type="button" role="radio" data-mode="team" aria-checked="true">No mesmo time</button>
+                <button type="button" role="radio" data-mode="match" aria-checked="false">Na mesma partida</button>
+              </div>
+              <div class="actions">
+                <button id="group-me" class="btn btn-sm" type="button">Incluir eu</button>
+                <button id="group-clear" class="btn btn-sm btn-danger" type="button">Limpar</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="group-result" class="group-result"></div>
+        </section>
+
+        <section id="s-data" class="block" style="--i: 4" data-nav>
+          <header class="block-head">
+            <h2>Seus dados</h2>
+            <p>O banco é seu. Leve para outra máquina, traga de volta ou apague.</p>
+          </header>
+          <div class="panel data">
+            <div class="data-row">
+              <div>
+                <h3>Cópia de segurança</h3>
+                <p>Um arquivo JSON com partidas, jogadores e anotações.</p>
+              </div>
+              <div class="actions">
+                <button id="export" class="btn" type="button">Exportar JSON</button>
+                <label class="btn file" for="import">
+                  Importar JSON
+                  <input id="import" type="file" accept="application/json" />
+                </label>
+              </div>
+            </div>
+            <div class="data-row">
+              <div>
+                <h3>Recalcular contadores</h3>
+                <p>Refaz os totais a partir das partidas gravadas e preenche vitórias e derrotas antigas.</p>
+              </div>
+              <div class="actions">
+                <button id="recompute" class="btn" type="button">Recalcular</button>
+              </div>
+            </div>
+            <div class="data-row is-danger">
+              <div>
+                <h3>Apagar tudo</h3>
+                <p>Remove o histórico local inteiro. Não tem volta: exporte antes se quiser guardar.</p>
+              </div>
+              <div class="actions">
+                <button id="wipe" class="btn btn-danger" type="button">Apagar tudo</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="maps-modal" class="modal" aria-labelledby="maps-title">
+      <div class="modal-card">
+        <header class="modal-head">
+          <span id="maps-avatar" class="avatar avatar-md"></span>
+          <div class="modal-title">
+            <div class="name-row"><h2 id="maps-title">Mapas</h2><span id="maps-level"></span></div>
+            <p id="maps-sub" class="modal-sub"></p>
+          </div>
+          <button id="maps-close" class="icon-btn" type="button" aria-label="Fechar">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+          </button>
+        </header>
+        <div id="maps-body" class="modal-body"></div>
+      </div>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="options.js"></script>
+  </body>
+</html>
