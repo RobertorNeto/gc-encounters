@@ -3,7 +3,7 @@ import {
   exportAll,
   getEncounters,
   getGroupStats,
-  getPlayerMapStats,
+  getPlayerMaps,
   getMonthlyResults,
   getSharedMatches,
   getStats,
@@ -374,8 +374,14 @@ describe('aproveitamento separado por relação', () => {
 });
 
 describe('mapas por jogador', () => {
-  it('agrupa por mapa com o resultado do proprio jogador', async () => {
-    await saveMatch(match('m1', 1_000, [2, 3, 4, 5, 6]), 'live');
+  it('separa juntos e contra, com o resultado certo em cada recorte', async () => {
+    await updateMeta({ myGcId: ME });
+    const contra = match('m1', 1_000, [2, 3, 4, 5, 6]);
+    contra.players[0]!.kills = 25;
+    contra.players[0]!.deaths = 15;
+    contra.players[1]!.kills = 12;
+    contra.players[1]!.deaths = 20;
+    await saveMatch(contra, 'live');
     await saveMatch(match('m2', 2_000, [2, 3, 4, 5, 6]), 'live');
     const inferno = match('m3', 3_000, [], [2]);
     inferno.match.map = 'de_inferno';
@@ -383,22 +389,32 @@ describe('mapas por jogador', () => {
     inferno.players[1]!.deaths = 10;
     await saveMatch(inferno, 'live');
 
-    const maps = await getPlayerMapStats(2);
-    // 2 jogou contra mim em m1/m2 (time B perdeu 16-14): as derrotas sao do jogador.
-    expect(maps[0]).toMatchObject({ map: 'de_mirage', played: 2, wins: 0, losses: 2, kdRows: 0 });
-    expect(maps[1]).toMatchObject({ map: 'de_inferno', played: 1, wins: 1, kills: 20, deaths: 10, kdRows: 1 });
-
-    const mine = await getPlayerMapStats(ME);
-    expect(mine[0]).toMatchObject({ map: 'de_mirage', played: 2, wins: 2 });
+    const maps = await getPlayerMaps(2);
+    // Historico do jogador: perdeu as duas contra mim (time B, 16-14 para A).
+    expect(maps.all[0]).toMatchObject({ map: 'de_mirage', played: 2, wins: 0, losses: 2 });
+    expect(maps.together).toEqual([
+      { map: 'de_inferno', played: 1, wins: 1, losses: 0, draws: 0, kills: 20, deaths: 10, kdRows: 1 },
+    ]);
+    // Embate: V/D sao MEUS; kills/deaths dele, my* meus.
+    expect(maps.against).toEqual([
+      {
+        map: 'de_mirage', played: 2, wins: 2, losses: 0, draws: 0,
+        kills: 12, deaths: 20, kdRows: 1, myKills: 25, myDeaths: 15, myKdRows: 1,
+      },
+    ]);
   });
 
-  it('partida sem mapa vai para o balde null, por ultimo', async () => {
+  it('para mim: tudo em all, recortes vazios, sem mapa por ultimo', async () => {
+    await updateMeta({ myGcId: ME });
     const semMapa = match('m1', 1_000, [2, 3, 4, 5, 6]);
     semMapa.match.map = null;
     await saveMatch(semMapa, 'live');
     await saveMatch(match('m2', 2_000, [2, 3, 4, 5, 6]), 'live');
-    const maps = await getPlayerMapStats(ME);
-    expect(maps.map((m) => m.map)).toEqual(['de_mirage', null]);
+    const mine = await getPlayerMaps(ME);
+    expect(mine.all.map((m) => m.map)).toEqual(['de_mirage', null]);
+    expect(mine.all[0]).toMatchObject({ played: 1, wins: 1 });
+    expect(mine.together).toEqual([]);
+    expect(mine.against).toEqual([]);
   });
 });
 
@@ -435,11 +451,11 @@ describe('agregador', () => {
     ]);
   });
 
-  it('ignora duplicados, corta em 4 e responde vazio sem jogador', async () => {
+  it('ignora duplicados, corta em eu + 4 e responde vazio sem jogador', async () => {
     expect((await getGroupStats([])).matches).toEqual([]);
-    await saveMatch(match('m1', 1_000, [], [2, 3, 4, 5]), 'live');
-    const g = await getGroupStats([2, 2, 3, 4, 5, ME]);
-    expect(g.players.map((p) => p.gcId)).toEqual([2, 3, 4, 5]);
+    await saveMatch(match('m1', 1_000, [6], [2, 3, 4, 5]), 'live');
+    const g = await getGroupStats([ME, 2, 2, 3, 4, 5, 6]);
+    expect(g.players.map((p) => p.gcId)).toEqual([ME, 2, 3, 4, 5]);
     expect(g.matches).toHaveLength(1);
   });
 });

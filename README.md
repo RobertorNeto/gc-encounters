@@ -52,8 +52,8 @@ conversa com `gamersclub.com.br` e nunca interage com o CS2.
 | **Página de partida** | Coleta silenciosa dos 10 jogadores, com K/D quando a GC fornece. |
 | **Página da extensão** | Contadores, ranking de reencontros, busca, anotações por jogador. |
 | **Varredura** | Percorre seu histórico em `/my-matches` com throttle (mínimo 2,5 s entre requisições) e cursor retomável. |
-| **Agregador** | Junta até 4 jogadores e mostra V/D, K/D e mapas das partidas com todos em campo. |
-| **Mapas** | Por jogador: partidas por mapa, gráfico dos mais jogados, V/D/E e % de vitória. |
+| **Agregador** | Você (sempre incluído) + até 4 jogadores: V/D, K/D e mapas das partidas com todos em campo. |
+| **Mapas** | Por jogador: mapas mais jogados juntos e embates (quando jogaram contra, com seu V/D e o K/D de cada lado). No seu perfil, todas as suas partidas. |
 | **Seus dados** | Exportar/importar o banco em JSON, recalcular contadores, apagar tudo. |
 
 ## Tecnologias
