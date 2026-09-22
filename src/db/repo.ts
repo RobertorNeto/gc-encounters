@@ -657,11 +657,28 @@ function sortMaps(maps: Iterable<MapStat>): MapStat[] {
   );
 }
 
+/** Embate por mapa: V/D sao MEUS contra o jogador; kills/deaths sao dele, `my*` sao meus. */
+export interface DuelMapStat extends MapStat {
+  myKills: number;
+  myDeaths: number;
+  myKdRows: number;
+}
+
+export interface PlayerMaps {
+  /** Todas as partidas gravadas do jogador, com o resultado dele (placar + time em que jogou). */
+  all: MapStat[];
+  /** So as partidas no meu time: o resultado dele e o meu. */
+  together: MapStat[];
+  /** So as partidas em times opostos, do meu ponto de vista. */
+  against: DuelMapStat[];
+}
+
 /**
- * Mapas de um jogador, com o resultado DO JOGADOR (placar + o time em que jogou), nao o meu.
- * Para mim da no mesmo; para os outros so existem as partidas que cruzaram comigo.
+ * Mapas de um jogador, separados por relacao comigo. Para mim `all` e o historico
+ * inteiro e os recortes ficam vazios; para os outros so existem partidas que cruzaram comigo.
  */
-export async function getPlayerMapStats(gcId: PlayerId): Promise<MapStat[]> {
+export async function getPlayerMaps(gcId: PlayerId): Promise<PlayerMaps> {
+  const { myGcId } = await getMeta();
   return withTx([STORES.matchPlayers, STORES.matches], 'readonly', async (tx) => {
     const rows = await getAllByIndex<MatchPlayer>(
       tx,
@@ -669,31 +686,74 @@ export async function getPlayerMapStats(gcId: PlayerId): Promise<MapStat[]> {
       INDEXES.matchPlayers.gcId,
       gcId,
     );
-    const store = tx.objectStore(STORES.matches);
-    const matches = await Promise.all(
-      rows.map((r) => promisify(store.get(r.matchId) as IDBRequest<Match | undefined>)),
-    );
-    const byMap = new Map<string | null, MapStat>();
-    rows.forEach((r, i) => {
-      const m = matches[i];
-      const key = m?.map ?? null;
-      const s = byMap.get(key) ?? emptyMapStat(key);
+    const matchStore = tx.objectStore(STORES.matches);
+    const mpStore = tx.objectStore(STORES.matchPlayers);
+    const [matches, mine] = await Promise.all([
+      Promise.all(rows.map((r) => promisify(matchStore.get(r.matchId) as IDBRequest<Match | undefined>))),
+      // Minha linha so importa nos embates: e dela que sai o meu K/D contra ele.
+      Promise.all(
+        rows.map((r) =>
+          r.relation === 'against' && myGcId !== null
+            ? promisify(mpStore.get([r.matchId, myGcId]) as IDBRequest<MatchPlayer | undefined>)
+            : Promise.resolve(undefined),
+        ),
+      ),
+    ]);
+
+    const all = new Map<string | null, MapStat>();
+    const together = new Map<string | null, MapStat>();
+    const against = new Map<string | null, DuelMapStat>();
+    const hasKd = (r: MatchPlayer | undefined): r is MatchPlayer & { kills: number; deaths: number } =>
+      typeof r?.kills === 'number' && typeof r.deaths === 'number';
+    const add = (s: MapStat, o: Outcome | null, r: MatchPlayer) => {
       s.played += 1;
-      addOutcome(s, outcomeOf(m?.score ?? null, r.team));
-      if (typeof r.kills === 'number' && typeof r.deaths === 'number') {
+      addOutcome(s, o);
+      if (hasKd(r)) {
         s.kills += r.kills;
         s.deaths += r.deaths;
         s.kdRows += 1;
       }
-      byMap.set(key, s);
+    };
+
+    rows.forEach((r, i) => {
+      const m = matches[i];
+      const key = m?.map ?? null;
+      const score = m?.score ?? null;
+      const own = outcomeOf(score, r.team);
+
+      const a = all.get(key) ?? emptyMapStat(key);
+      add(a, own, r);
+      all.set(key, a);
+
+      if (r.relation === 'together') {
+        const t = together.get(key) ?? emptyMapStat(key);
+        add(t, own, r);
+        together.set(key, t);
+      } else if (r.relation === 'against') {
+        const d = against.get(key) ?? { ...emptyMapStat(key), myKills: 0, myDeaths: 0, myKdRows: 0 };
+        add(d, outcomeOf(score, r.team === 'A' ? 'B' : 'A'), r);
+        const me = mine[i];
+        if (hasKd(me)) {
+          d.myKills += me.kills;
+          d.myDeaths += me.deaths;
+          d.myKdRows += 1;
+        }
+        against.set(key, d);
+      }
     });
-    return sortMaps(byMap.values());
+
+    return {
+      all: sortMaps(all.values()),
+      together: sortMaps(together.values()),
+      against: sortMaps(against.values()) as DuelMapStat[],
+    };
   });
 }
 
 /** `team`: so partidas com todos no mesmo time. `match`: qualquer partida com todos em campo. */
 export type GroupMode = 'team' | 'match';
 
+/** Jogadores escolhidos no agregador. Eu entro por fora, sempre: o teto da consulta e MAX_GROUP + 1. */
 export const MAX_GROUP = 4;
 
 export interface GroupLine {
@@ -751,7 +811,7 @@ export interface GroupStats {
  * O banco so tem partidas minhas, entao "todas" = todas que a extensao viu.
  */
 export async function getGroupStats(gcIds: PlayerId[], mode: GroupMode = 'team'): Promise<GroupStats> {
-  const ids = [...new Set(gcIds)].slice(0, MAX_GROUP);
+  const ids = [...new Set(gcIds)].slice(0, MAX_GROUP + 1);
   const out: GroupStats = {
     mode,
     players: [],

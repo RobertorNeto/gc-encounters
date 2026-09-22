@@ -9,7 +9,7 @@ import {
   getGroupStats,
   getMeta,
   getMonthlyResults,
-  getPlayerMapStats,
+  getPlayerMaps,
   getSharedMatches,
   getStats,
   getTopEncounters,
@@ -21,11 +21,13 @@ import {
   wipe,
   MAX_GROUP,
   type DbDump,
+  type DuelMapStat,
   type GroupMatch,
   type GroupMode,
   type GroupStats,
   type MapStat,
   type MonthlyResults,
+  type PlayerMaps,
   type SharedMatch,
 } from '@/db/repo';
 import { log } from '@/lib/log';
@@ -190,8 +192,8 @@ function statusSubtitle(bf: BackfillState): string {
 /** Busca ativa na lista de reencontros. Vazia = ranking. */
 let query = '';
 
-/** Total de partidas no ultimo refresh; -1 antes do primeiro. */
-let lastMatchCount = -1;
+/** Total de partidas + meu id no ultimo refresh; vazio antes do primeiro. */
+let lastGroupKey = '';
 
 async function refresh(): Promise<void> {
   const [stats, meta, monthly] = await Promise.all([getStats(), getMeta(), getMonthlyResults()]);
@@ -215,11 +217,12 @@ async function refresh(): Promise<void> {
 
   renderAlert(meta.lastFailure);
 
-  // Partida nova, import ou wipe: o agregador refaz a conta. Fora isso fica parado,
-  // senao o tick de 2 s fecharia a lista de partidas que o usuario esta lendo.
-  if (stats.matches !== lastMatchCount) {
-    const first = lastMatchCount === -1;
-    lastMatchCount = stats.matches;
+  // Partida nova, import, wipe ou troca do meu id: o agregador refaz a conta. Fora
+  // isso fica parado, senao o tick de 2 s fecharia a lista que o usuario esta lendo.
+  const groupKey = `${stats.matches}:${meta.myGcId ?? ''}`;
+  if (groupKey !== lastGroupKey) {
+    const first = lastGroupKey === '';
+    lastGroupKey = groupKey;
     if (!first) void renderGroup();
   }
 
@@ -918,10 +921,27 @@ const MAP_CHART_ROWS = 8;
  * confundem para quem tem deuteranopia (validador: dE 4,4), entao a derrota leva
  * hachura e o percentual vem escrito ao lado: a cor nunca e a unica pista.
  */
-function mapChart(maps: MapStat[], limit = MAP_CHART_ROWS): HTMLElement {
+interface ChartOpts {
+  /** Rotulos da legenda; nos embates "vitoria" e "voce venceu". */
+  win?: string;
+  loss?: string;
+  /** Unidade no tooltip: "partida" ou "embate". */
+  unit?: [string, string];
+  /** Trecho extra do tooltip (K/D). */
+  extra?: (s: MapStat) => string;
+  limit?: number;
+}
+
+function mapChart(maps: MapStat[], opts: ChartOpts = {}): HTMLElement {
+  const limit = opts.limit ?? MAP_CHART_ROWS;
+  const [one, many] = opts.unit ?? ['partida', 'partidas'];
   const box = el('figure', 'mapchart');
   const legend = el('figcaption', 'mc-legend');
-  for (const [cls, label] of [['w', 'Vitórias'], ['l', 'Derrotas'], ['o', 'Empates e sem placar']] as const) {
+  for (const [cls, label] of [
+    ['w', opts.win ?? 'Vitórias'],
+    ['l', opts.loss ?? 'Derrotas'],
+    ['o', 'Empates e sem placar'],
+  ] as const) {
     const item = el('span', 'mc-key');
     item.append(el('i', `sw ${cls}`), label);
     legend.append(item);
@@ -938,8 +958,8 @@ function mapChart(maps: MapStat[], limit = MAP_CHART_ROWS): HTMLElement {
     row.tabIndex = 0;
     const decided = s.wins + s.losses + s.draws;
     const rate = decided ? `${Math.round((s.wins / decided) * 100)}% de vitórias` : 'sem placar';
-    const kd = s.kdRows ? `, K/D ${kdText(s.kills, s.deaths)}` : '';
-    const tip = `${mapLabel(s.map)}: ${fmtInt(s.played)} ${s.played === 1 ? 'partida' : 'partidas'}, ${recordText(s)}, ${rate}${kd}`;
+    const kd = opts.extra ? opts.extra(s) : s.kdRows ? `, K/D ${kdText(s.kills, s.deaths)}` : '';
+    const tip = `${mapLabel(s.map)}: ${fmtInt(s.played)} ${s.played === 1 ? one : many}, ${recordText(s)}, ${rate}${kd}`;
     row.dataset.tip = tip;
     row.setAttribute('aria-label', tip);
 
@@ -1081,27 +1101,172 @@ async function openMapsModal(gcId: number, nick: string, level: number | null): 
   body.append(el('p', 'placeholder', 'carregando mapas…'));
   if (!dlg.open) dlg.showModal();
 
-  const [maps, meta] = await Promise.all([getPlayerMapStats(gcId), getMeta()]);
+  const [maps, meta] = await Promise.all([getPlayerMaps(gcId), getMeta()]);
   if (token !== mapsToken) return;
 
-  sub.textContent =
-    gcId === meta.myGcId
-      ? 'Todas as suas partidas gravadas.'
-      : 'Nas partidas gravadas em que vocês se cruzaram, com o resultado do jogador em cada uma.';
   body.textContent = '';
-  if (maps.length === 0) {
-    const empty = el('div', 'empty-state');
-    empty.append(el('strong', '', 'Nenhuma partida gravada'), 'Os mapas aparecem quando houver partida registrada.');
-    body.append(empty);
+  if (maps.all.length === 0) {
+    sub.textContent = `#${gcId}`;
+    body.append(emptyState('Nenhuma partida gravada', 'Os mapas aparecem quando houver partida registrada.'));
     return;
   }
-  body.append(
-    mapSummary(maps),
-    el('h3', 'sub-head', 'Mais jogados'),
-    mapChart(maps),
-    el('h3', 'sub-head', 'Por mapa'),
-    mapTable(maps),
+
+  // Eu: o historico inteiro num grafico so. Os outros: juntos e contra, separados.
+  if (gcId === meta.myGcId) {
+    sub.textContent = 'Todas as suas partidas gravadas.';
+    body.append(
+      mapSummary(maps.all),
+      el('h3', 'sub-head', 'Mais jogados'),
+      mapChart(maps.all),
+      el('h3', 'sub-head', 'Por mapa'),
+      mapTable(maps.all),
+    );
+    return;
+  }
+
+  sub.textContent = 'Nas partidas gravadas em que vocês se cruzaram.';
+  body.append(relationSummary(maps), el('h3', 'sub-head', 'Mais jogados juntos'));
+  if (maps.together.length) {
+    body.append(mapChart(maps.together), mapTable(maps.together));
+  } else {
+    body.append(emptyState('Nunca no mesmo time', 'Nenhuma partida gravada com vocês dois do mesmo lado.'));
+  }
+
+  const duelHead = el('div', 'section-head');
+  duelHead.append(
+    el('h3', 'sub-head', 'Embates: quando jogaram contra'),
+    el('p', 'section-sub', `Seu resultado contra ${nick} em cada mapa, com o K/D de cada lado.`),
   );
+  body.append(duelHead);
+  if (maps.against.length) {
+    body.append(
+      mapChart(maps.against, {
+        win: 'Você venceu',
+        loss: `${nick} venceu`,
+        unit: ['embate', 'embates'],
+        extra: (d) => duelKdTip(d as DuelMapStat, nick),
+      }),
+      duelTable(maps.against, nick),
+    );
+  } else {
+    body.append(emptyState('Nunca em lados opostos', 'Nenhuma partida gravada com vocês em times diferentes.'));
+  }
+}
+
+function emptyState(title: string, hint: string): HTMLElement {
+  const box = el('div', 'empty-state');
+  box.append(el('strong', '', title), hint);
+  return box;
+}
+
+function duelKdTip(d: DuelMapStat, nick: string): string {
+  const parts: string[] = [];
+  if (d.myKdRows) parts.push(`seu K/D ${kdText(d.myKills, d.myDeaths)}`);
+  if (d.kdRows) parts.push(`K/D de ${nick} ${kdText(d.kills, d.deaths)}`);
+  return parts.length ? `, ${parts.join(', ')}` : '';
+}
+
+type Tally = { played: number; wins: number; losses: number; draws: number };
+
+function sumTally(list: MapStat[]): Tally {
+  return list.reduce<Tally>(
+    (acc, s) => ({
+      played: acc.played + s.played,
+      wins: acc.wins + s.wins,
+      losses: acc.losses + s.losses,
+      draws: acc.draws + s.draws,
+    }),
+    { played: 0, wins: 0, losses: 0, draws: 0 },
+  );
+}
+
+/** Resumo do modal de outro jogador: os dois recortes lado a lado. */
+function relationSummary(maps: PlayerMaps): HTMLElement {
+  const dl = el('dl', 'mstats');
+  const cell = (label: string, value: string, sub?: string, tone?: 'good' | 'bad') => {
+    const div = el('div');
+    div.append(el('dt', '', label), el('dd', tone ? `is-${tone}` : '', value));
+    if (sub) div.append(el('span', 'mstats-sub', sub));
+    dl.append(div);
+  };
+  const decidedOf = (t: Tally) => t.wins + t.losses + t.draws;
+  const rate = (t: Tally) =>
+    decidedOf(t) ? `${Math.round((t.wins / decidedOf(t)) * 100)}% V · ${recordText(t)}` : 'sem placar';
+  const tone = (t: Tally): 'good' | 'bad' | undefined =>
+    decidedOf(t) ? (t.wins / decidedOf(t) >= 0.5 ? 'good' : 'bad') : undefined;
+  const pctOf = (s: MapStat) =>
+    `${Math.round((s.wins / (s.wins + s.losses + s.draws)) * 100)}% V em ${fmtInt(s.played)}`;
+
+  const together = sumTally(maps.together);
+  const against = sumTally(maps.against);
+  const bestTogether = bestAndWorst(maps.together).best;
+  const bestDuel = bestAndWorst(maps.against).best;
+
+  cell('Juntos', fmtInt(together.played), together.played ? rate(together) : undefined, tone(together));
+  cell('Contra', fmtInt(against.played), against.played ? `você: ${rate(against)}` : undefined, tone(against));
+  cell('Mapas diferentes', fmtInt(maps.all.filter((s) => s.map !== null).length));
+  cell(
+    'Melhor mapa juntos',
+    bestTogether ? mapLabel(bestTogether.map) : '—',
+    bestTogether ? pctOf(bestTogether) : `mín. ${MIN_FOR_BEST} partidas`,
+    bestTogether ? 'good' : undefined,
+  );
+  cell(
+    'Seu melhor embate',
+    bestDuel ? mapLabel(bestDuel.map) : '—',
+    bestDuel ? pctOf(bestDuel) : `mín. ${MIN_FOR_BEST} embates`,
+    bestDuel ? 'good' : undefined,
+  );
+  return dl;
+}
+
+/** Tabela dos embates: V/D meus, K/D dos dois lados. */
+function duelTable(maps: DuelMapStat[], nick: string): HTMLElement {
+  const wrap = el('div', 'table-wrap');
+  const table = el('table', 'dtable');
+  const head = el('tr');
+  const cols: [string, boolean][] = [
+    ['Mapa', false],
+    ['Embates', true],
+    ['Suas V', true],
+    ['Suas D', true],
+    ['E', true],
+    ['Seu %V', true],
+    ['Seu K/D', true],
+    [`K/D de ${nick}`, true],
+  ];
+  for (const [label, num] of cols) {
+    const th = el('th', num ? 'num' : '', label);
+    th.scope = 'col';
+    head.append(th);
+  }
+  table.append(el('thead'), el('tbody'));
+  table.tHead!.append(head);
+  for (const d of maps) {
+    const tr = el('tr');
+    const name = el('th', 'map-name', mapLabel(d.map));
+    name.scope = 'row';
+    if (d.map) name.title = d.map;
+    const rate = el('td', 'num');
+    rate.append(winPill(d));
+    const mine = el('td', 'num');
+    mine.append(kdCell(d.myKills, d.myDeaths, d.myKdRows));
+    const theirs = el('td', 'num');
+    theirs.append(kdCell(d.kills, d.deaths, d.kdRows));
+    tr.append(
+      name,
+      el('td', 'num', fmtInt(d.played)),
+      el('td', 'num good', fmtInt(d.wins)),
+      el('td', 'num bad', fmtInt(d.losses)),
+      el('td', 'num', fmtInt(d.draws)),
+      rate,
+      mine,
+      theirs,
+    );
+    table.tBodies[0]!.append(tr);
+  }
+  wrap.append(table);
+  return wrap;
 }
 
 function wireMapsModal(): void {
@@ -1153,6 +1318,29 @@ const initialGroup = loadGroup();
 let groupPicks: GroupPick[] = initialGroup.picks;
 let groupMode: GroupMode = initialGroup.mode;
 let groupToken = 0;
+/** Eu: sempre dentro do grupo, fora da conta dos 4 e sem botao de remover. */
+let groupMe: GroupPick | null = null;
+
+/** Descobre quem sou eu e tira meu id da escolha (storage antigo podia me ter como pick). */
+async function loadGroupMe(): Promise<GroupPick | null> {
+  const meta = await getMeta();
+  if (!meta.myGcId) {
+    groupMe = null;
+    return null;
+  }
+  const mine = (await getEncounters([meta.myGcId])).get(meta.myGcId);
+  groupMe = {
+    gcId: meta.myGcId,
+    nick: mine?.nick ?? meta.myNick ?? `#${meta.myGcId}`,
+    lastLevel: mine?.lastLevel ?? meta.myLevel ?? null,
+  };
+  const myId = meta.myGcId;
+  if (groupPicks.some((p) => p.gcId === myId)) {
+    groupPicks = groupPicks.filter((p) => p.gcId !== myId);
+    saveGroup();
+  }
+  return groupMe;
+}
 
 /** Partidas da lista do agregador antes do "ver mais". */
 const GROUP_PAGE = 20;
@@ -1163,7 +1351,7 @@ function addToGroup(p: GroupPick): void {
     say(`O agregador junta no máximo ${MAX_GROUP} jogadores`, 'error');
     return;
   }
-  if (groupPicks.some((g) => g.gcId === p.gcId)) return;
+  if (groupPicks.some((g) => g.gcId === p.gcId) || p.gcId === groupMe?.gcId) return;
   groupPicks = [...groupPicks, p];
   saveGroup();
   renderChips();
@@ -1180,8 +1368,16 @@ function removeFromGroup(gcId: number): void {
 function renderChips(): void {
   const box = $('group-chips');
   box.textContent = '';
+  if (groupMe) {
+    const chip = el('span', 'chip is-me');
+    chip.title = 'Você entra em todas as partidas do agregador';
+    chip.append(avatar(groupMe.gcId, groupMe.nick, el('span', 'avatar avatar-xs')), el('span', 'chip-name', groupMe.nick));
+    if (groupMe.lastLevel !== null) chip.append(levelBadge(groupMe.lastLevel, true));
+    chip.append(el('span', 'chip-tag', 'você'));
+    box.append(chip);
+  }
   if (groupPicks.length === 0) {
-    box.append(el('span', 'chips-empty', 'Nenhum jogador escolhido. Busque abaixo ou inclua você mesmo.'));
+    box.append(el('span', 'chips-empty', `Escolha até ${MAX_GROUP} jogadores. Você sempre entra.`));
   }
   for (const p of groupPicks) {
     const chip = el('span', 'chip');
@@ -1220,6 +1416,7 @@ async function openSuggest(q: string): Promise<void> {
   const rows = q ? await searchPlayers(q) : await getTopEncounters(SUGGEST_LIMIT * 2);
   if (suggestQuery !== q) return; // resposta atrasada
   const chosen = new Set(groupPicks.map((g) => g.gcId));
+  if (groupMe) chosen.add(groupMe.gcId);
   suggestItems = rows.filter((r) => !chosen.has(r.gcId)).slice(0, SUGGEST_LIMIT);
   suggestActive = suggestItems.length ? 0 : -1;
   paintSuggest(q);
@@ -1278,6 +1475,7 @@ function pickSuggestion(i: number): void {
   void openSuggest('');
 }
 
+/** "dublex, kovac e rickLee": so os escolhidos; eu fico implicito ("voce com ..."). */
 function groupNames(): string {
   const nicks = groupPicks.map((p) => p.nick);
   if (nicks.length <= 1) return nicks[0] ?? '';
@@ -1287,13 +1485,22 @@ function groupNames(): string {
 async function renderGroup(): Promise<void> {
   const token = ++groupToken;
   const box = $('group-result');
+  const me = await loadGroupMe();
+  if (token !== groupToken) return;
+  renderChips();
+
+  if (!me) {
+    box.textContent = '';
+    box.append(emptyState('Falta o seu id GC', 'Você entra em todas as partidas do agregador. Defina o id em Visão geral.'));
+    return;
+  }
   if (groupPicks.length === 0) {
     box.textContent = '';
     return;
   }
   box.classList.add('is-loading');
   const stats = await getGroupStats(
-    groupPicks.map((p) => p.gcId),
+    [me.gcId, ...groupPicks.map((p) => p.gcId)],
     groupMode,
   );
   if (token !== groupToken) return;
@@ -1314,17 +1521,14 @@ async function renderGroup(): Promise<void> {
   }
 
   if (stats.matches.length === 0) {
-    const empty = el('div', 'panel empty-state');
-    const title =
-      groupPicks.length === 1
-        ? `Nenhuma partida gravada com ${groupNames()}`
-        : `Nenhuma partida gravada com ${groupNames()} ${groupMode === 'team' ? 'no mesmo time' : 'na mesma partida'}`;
-    empty.append(
-      el('strong', '', title),
-      groupMode === 'team' && groupPicks.length > 1
+    const where = groupMode === 'team' ? 'no mesmo time' : 'na mesma partida';
+    const empty = emptyState(
+      `Nenhuma partida gravada sua com ${groupNames()} ${where}`,
+      groupMode === 'team'
         ? 'Tente "Na mesma partida" para incluir as vezes em que jogaram em lados opostos.'
         : 'Só entram partidas que a extensão registrou.',
     );
+    empty.classList.add('panel');
     box.append(empty);
     return;
   }
@@ -1366,7 +1570,7 @@ function groupSummary(stats: GroupStats): HTMLElement {
   cell('Mapa mais jogado', top ? mapLabel(top.map) : '—', 'is-date', top ? `${fmtInt(top.played)} partidas` : '');
   wrap.append(dl);
 
-  if (stats.mode === 'match' && groupPicks.length > 1) {
+  if (stats.mode === 'match') {
     const other = stats.matches.length - stats.sameTeam;
     wrap.append(
       el(
@@ -1562,23 +1766,6 @@ function wireGroup(): void {
       void renderGroup();
     });
   }
-
-  const me = $('group-me');
-  me.addEventListener('click', () => {
-    void busy(me, async () => {
-      const meta = await getMeta();
-      if (!meta.myGcId) {
-        say('Defina seu id GC em Visão geral primeiro', 'error');
-        return;
-      }
-      const mine = (await getEncounters([meta.myGcId])).get(meta.myGcId);
-      addToGroup({
-        gcId: meta.myGcId,
-        nick: mine?.nick ?? meta.myNick ?? `#${meta.myGcId}`,
-        lastLevel: mine?.lastLevel ?? meta.myLevel ?? null,
-      });
-    });
-  });
 
   $('group-clear').addEventListener('click', () => {
     groupPicks = [];
